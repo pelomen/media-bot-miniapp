@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Media Hub & Player | Telegram Mini App</title>
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-dark">
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon"><i class="fa-brands fa-tiktok"></i><i class="fa-brands fa-youtube"></i></div>
+        <div class="brand-title">
+          <h1>Media Hub</h1>
+          <span class="badge" id="onlineBadge">Mini App</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="importBtn" class="icon-btn" title="Добавить файл"><i class="fa-solid fa-cloud-arrow-up"></i></button>
+        <button id="clearDataBtn" class="icon-btn danger" title="Очистить память"><i class="fa-solid fa-trash-can"></i></button>
+      </div>
+      <input type="file" id="fileInput" accept="audio/*,video/*,image/*" multiple style="display: none;">
+    </header>
+
+    <!-- Main Navigation Bar -->
+    <nav class="tab-navigation">
+      <button class="nav-tab active" data-tab="musicTab">
+        <i class="fa-solid fa-music"></i>
+        <span>Музыка</span>
+      </button>
+      <button class="nav-tab" data-tab="videoTab">
+        <i class="fa-solid fa-film"></i>
+        <span>Видео</span>
+      </button>
+      <button class="nav-tab" data-tab="slidesTab">
+        <i class="fa-solid fa-images"></i>
+        <span>Слайды</span>
+      </button>
+      <button class="nav-tab" data-tab="downloadTab">
+        <i class="fa-solid fa-circle-down"></i>
+        <span>Загрузка</span>
+      </button>
+    </nav>
+
+    <!-- Content Sections -->
+    <main class="main-content">
+      <!-- 1. Music Tab -->
+      <section id="musicTab" class="tab-pane active">
+        <!-- Now Playing Card -->
+        <div class="player-hero-card">
+          <div class="cover-art-wrapper">
+            <div class="cover-art" id="currentCover">
+              <i class="fa-solid fa-compact-disc disc-spinning" id="discIcon"></i>
+            </div>
+            <!-- Equalizer waves animation -->
+            <div class="visualizer" id="visualizer">
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </div>
+          </div>
+
+          <div class="track-details">
+            <h2 id="currentTrackTitle">Выберите песню</h2>
+            <p id="currentTrackAuthor">Media Hub Player</p>
+          </div>
+
+          <!-- Progress Bar -->
+          <div class="progress-container">
+            <div class="progress-bar" id="progressBar">
+              <div class="progress-fill" id="progressFill"></div>
+              <div class="progress-thumb" id="progressThumb"></div>
+            </div>
+            <div class="time-labels">
+              <span id="currentTime">00:00</span>
+              <span id="totalDuration">00:00</span>
+            </div>
+          </div>
+
+          <!-- Controls -->
+          <div class="player-controls">
+            <button id="shuffleBtn" class="control-btn small" title="Перемешать"><i class="fa-solid fa-shuffle"></i></button>
+            <button id="prevBtn" class="control-btn" title="Предыдущий"><i class="fa-solid fa-backward-step"></i></button>
+            <button id="playPauseBtn" class="control-btn primary" title="Воспроизведение"><i class="fa-solid fa-play"></i></button>
+            <button id="nextBtn" class="control-btn" title="Следующий"><i class="fa-solid fa-forward-step"></i></button>
+            <button id="repeatBtn" class="control-btn small" title="Повтор"><i class="fa-solid fa-repeat"></i></button>
+          </div>
+
+          <!-- Volume Bar -->
+          <div class="volume-slider-box">
+            <i class="fa-solid fa-volume-low"></i>
+            <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="0.9">
+            <i class="fa-solid fa-volume-high"></i>
+          </div>
+        </div>
+
+        <!-- Playlist Section -->
+        <div class="section-block">
+          <div class="section-header">
+            <h3><i class="fa-solid fa-list-ul"></i> Сохраненные треки (<span id="trackCount">0</span>)</h3>
+            <span class="sub-text">Сохраняются в памяти устройства</span>
+          </div>
+          <div class="track-list" id="trackList">
+            <!-- Dynamic tracks list -->
+            <div class="empty-state">
+              <i class="fa-solid fa-music"></i>
+              <p>Пока нет скачанных песен.<br>Отправьте ссылку в бота или загрузите аудиофайл.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Video Tab -->
+      <section id="videoTab" class="tab-pane">
+        <div class="section-header">
+          <h3><i class="fa-solid fa-video"></i> Библиотека видео (<span id="videoCount">0</span>)</h3>
+          <span class="sub-text">YouTube & TikTok ролики</span>
+        </div>
+
+        <div class="video-grid" id="videoGrid">
+          <div class="empty-state">
+            <i class="fa-solid fa-clapperboard"></i>
+            <p>Нет сохраненных видео.<br>Скачайте видеоролики через бота.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Slideshow Tab -->
+      <section id="slidesTab" class="tab-pane">
+        <div class="section-header">
+          <h3><i class="fa-solid fa-images"></i> Слайд-шоу из TikTok (<span id="slidesCount">0</span>)</h3>
+          <span class="sub-text">Фотографии с оригинальной музыкой</span>
+        </div>
+
+        <div id="slideshowViewer" class="slideshow-container empty">
+          <div class="empty-state">
+            <i class="fa-solid fa-camera-retro"></i>
+            <p>Слайд-шоу пока не загружены.<br>Пришлите ссылку на карусель TikTok в бот.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Direct Link Downloader Tab -->
+      <section id="downloadTab" class="tab-pane">
+        <div class="download-card">
+          <div class="card-hero">
+            <i class="fa-solid fa-bolt-lightning"></i>
+            <h2>Быстрый заказ</h2>
+            <p>Вставьте ссылку на TikTok или YouTube видео / слайд-шоу:</p>
+          </div>
+          <div class="input-group">
+            <input type="url" id="linkInput" placeholder="https://vt.tiktok.com/... или https://youtu.be/..." autocomplete="off">
+            <button id="submitLinkBtn" class="btn-primary">
+              <i class="fa-solid fa-paper-plane"></i> Отправить
+            </button>
+          </div>
+          <div class="format-options">
+            <label class="radio-label">
+              <input type="radio" name="downloadType" value="auto" checked>
+              <span>Авто (Видео + Музыка)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="downloadType" value="audio">
+              <span>Только музыка (MP3)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="downloadType" value="slides">
+              <span>Фото слайд-шоу</span>
+            </label>
+          </div>
+          <div id="downloadFeedback" class="feedback-msg"></div>
+        </div>
+
+        <div class="info-guide">
+          <h4><i class="fa-solid fa-circle-info"></i> Возможности плеера:</h4>
+          <ul>
+            <li><strong>TikTok Слайд-шоу:</strong> скачивает все фото в высоком разрешении и фоновый трек.</li>
+            <li><strong>YouTube & TikTok видео:</strong> мгновенное извлечение аудиодорожки в MP3.</li>
+            <li><strong>Офлайн-память:</strong> все треки сохраняются в браузере (IndexedDB) и играют без интернета.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <!-- Global Video Modal -->
+    <div id="videoModal" class="modal">
+      <div class="modal-content">
+        <button id="closeVideoModal" class="modal-close">&times;</button>
+        <div class="video-wrapper">
+          <video id="modalVideoPlayer" controls playsinline></video>
+        </div>
+        <div class="modal-info">
+          <h3 id="modalVideoTitle">Заголовок видео</h3>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden audio element for player -->
+    <audio id="globalAudio"></audio>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
