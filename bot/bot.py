@@ -33,7 +33,12 @@ from telebot.types import (
 )
 
 # Configuration
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+    BOT_TOKEN = sys.argv[1]
+if len(sys.argv) > 2:
+    os.environ["WEBAPP_URL"] = sys.argv[2]
+
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://github.com")
 
 logging.basicConfig(
@@ -42,7 +47,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MediaBot")
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+# TeleBot requires token with a colon on initialization
+_init_token = BOT_TOKEN if (BOT_TOKEN and ":" in BOT_TOKEN) else "123456789:AAPlaceholderTokenForInitializingHandlers"
+bot = telebot.TeleBot(_init_token, parse_mode="HTML")
 
 # In-memory cache for pending slideshow selections
 slideshow_cache: Dict[str, Dict[str, Any]] = {}
@@ -405,10 +412,18 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         WEBAPP_URL = sys.argv[2]
 
+    if not BOT_TOKEN or ":" not in BOT_TOKEN or "Placeholder" in BOT_TOKEN:
+        print("\n" + "=" * 50)
+        print(" [!] ВНИМАНИЕ: Не указан Telegram BOT_TOKEN!")
+        print("=" * 50)
+        print(" Запуск:")
+        print("   python bot.py <ВАШ_ТОКЕН> [URL_МИНИ_АППА]")
+        print(" Или:")
+        print("   export BOT_TOKEN='123456:ABC...' && python bot.py")
+        print("=" * 50 + "\n")
+        sys.exit(1)
+
     logger.info("Starting Media Downloader Telegram Bot...")
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
-        print("\n[!] ВНИМАНИЕ: BOT_TOKEN не установлен!")
-        print("Запустите бота командой: python bot.py <ВАШ_ТОКЕН> или укажите BOT_TOKEN в начале файла.\n")
     try:
         bot.infinity_polling(timeout=20, long_polling_timeout=10)
     except Exception as e:
