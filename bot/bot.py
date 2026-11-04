@@ -398,10 +398,17 @@ def handle_youtube(message, status_msg, url: str, forced_type: str = "auto"):
     bot.delete_message(chat_id, status_msg.message_id)
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        BOT_TOKEN = sys.argv[1]
+        bot.token = BOT_TOKEN
+
+    if len(sys.argv) > 2:
+        WEBAPP_URL = sys.argv[2]
+
     logger.info("Starting Media Downloader Telegram Bot...")
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
         print("\n[!] ВНИМАНИЕ: BOT_TOKEN не установлен!")
-        print("Запустите бота командой: python bot.py --token <ВАШ_ТОКЕН> или укажите BOT_TOKEN в начале файла.\n")
+        print("Запустите бота командой: python bot.py <ВАШ_ТОКЕН> или укажите BOT_TOKEN в начале файла.\n")
     try:
         bot.infinity_polling(timeout=20, long_polling_timeout=10)
     except Exception as e:
