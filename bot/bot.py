@@ -39,7 +39,7 @@ if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
 if len(sys.argv) > 2:
     os.environ["WEBAPP_URL"] = sys.argv[2]
 
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://github.com")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://pelomen.github.io/media-bot-miniapp/")
 
 logging.basicConfig(
     format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s",

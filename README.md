@@ -2,6 +2,12 @@
 
 > Полнофункциональный Telegram-бот для скачивания медиа из **TikTok** и **YouTube**, а также встроенный автономный веб-плеер (**Telegram Mini App**) на чистом HTML5/CSS3/JavaScript с поддержкой IndexedDB, плейлистов, видеотеки и слайд-шоу.
 
+[![GitHub Pages](https://img.shields.io/badge/Mini_App-Live_Demo-8A2BE2?style=for-the-badge&logo=telegram)](https://pelomen.github.io/media-bot-miniapp/)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?style=for-the-badge&logo=github)](https://github.com/pelomen/media-bot-miniapp)
+
+- 🌐 **Live Telegram Mini App:** [https://pelomen.github.io/media-bot-miniapp/](https://pelomen.github.io/media-bot-miniapp/)
+- 📦 **GitHub Репозиторий:** [https://github.com/pelomen/media-bot-miniapp](https://github.com/pelomen/media-bot-miniapp)
+
 ---
 
 ## ✨ Возможности
