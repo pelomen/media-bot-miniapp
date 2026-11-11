@@ -1,11 +1,10 @@
-# 🎬 Media Downloader Bot & Telegram Mini App Player 🎵
+# Media Bot and Mini App
 
-> Полнофункциональный Telegram-бот для скачивания медиа из **TikTok** и **YouTube**, а также встроенный автономный веб-плеер (**Telegram Mini App**) на чистом HTML5/CSS3/JavaScript с поддержкой IndexedDB, плейлистов, видеотеки и слайд-шоу.
+> Telegram-бот для обработки ссылок TikTok и YouTube, а также локальный медиаплеер для Telegram Mini App.
 
-[![GitHub Pages](https://img.shields.io/badge/Mini_App-Live_Demo-8A2BE2?style=for-the-badge&logo=telegram)](https://pelomen.github.io/media-bot-miniapp/)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?style=for-the-badge&logo=github)](https://github.com/pelomen/media-bot-miniapp)
 
-- 🌐 **Live Telegram Mini App:** [https://pelomen.github.io/media-bot-miniapp/](https://pelomen.github.io/media-bot-miniapp/)
+- 🌐 **Mini App:** [https://pelomen.github.io/media-bot-miniapp/](https://pelomen.github.io/media-bot-miniapp/)
 - 📦 **GitHub Репозиторий:** [https://github.com/pelomen/media-bot-miniapp](https://github.com/pelomen/media-bot-miniapp)
 
 ---
@@ -28,36 +27,51 @@
   - Динамический визуализатор звуковых волн (аудио-эквалайзер).
   - Анимированная пластинка винила.
   - Регулировка громкости.
-- **Постоянное хранилище (IndexedDB):**
-  - Все скачанные треки, видео и слайды сохраняются в локальную базу данных браузера устройства.
-  - Музыка играет даже без интернета (офлайн).
+- **Локальная библиотека (IndexedDB):** импортированные аудио и видео остаются на этом устройстве и доступны офлайн.
+- **Слайд-шоу:** выберите несколько изображений через импорт файлов; при выборе аудио оно добавится как фоновая дорожка.
 - **Видеоплеер:** Полноэкранный плеер для роликов YouTube и TikTok.
 - **Просмотрщик слайд-шоу:** Интерактивная галерея для фото-слайдов TikTok с одновременным воспроизведением фонового трека.
-- **Темная тема Telegram:** Автоматическая адаптация под цвета интерфейса Telegram и тактильная отдача (Haptic Feedback).
+- **Монохромная тема:** чёрно-белая палитра с поддержкой Telegram WebApp и тактильной отдачей.
 
 ---
 
 ## 🚀 Быстрый старт
 
-### 1. Требования
-- Python 3.9+
-- `ffmpeg`
-- Telegram Bot Token (получить бесплатно у [@BotFather](https://t.me/BotFather))
+### Требования
+- Python 3.9 или новее
+- `ffmpeg` (для извлечения MP3 с YouTube)
+- токен Telegram-бота от [@BotFather](https://t.me/BotFather)
 
-### 2. Установка зависимостей
+### Настройка
 ```bash
 pip install -r bot/requirements.txt
+cp .env.example .env
 ```
 
-### 3. Запуск бота
-```bash
-# Передайте токен напрямую:
-bash run_bot.sh <ВАШ_ТОКЕН_БОТА> [URL_МИНИ_АППА]
+Скопируйте `.env.example` в `.env` и впишите токен (в Windows первый запуск `start_bot.bat` создаст этот файл автоматически). В Termux его можно открыть командой `nano .env`. Локальный `.env` исключён из Git.
 
-# Либо через переменную окружения:
-export BOT_TOKEN="123456789:ABCdefGhIjkLmNoPqRsTuVwXyZ"
-export WEBAPP_URL="https://<username>.github.io/<repo>/"
-python bot/bot.py
+### Запуск в Windows
+Дважды щёлкните `start_bot.bat`. При первом запуске скрипт создаст `.venv`, установит зависимости и использует `.env`. Можно передать параметры вручную:
+```bash
+start_bot.bat <ТОКЕН> [URL_МИНИ_АППА]
+```
+
+### Запуск в Termux
+В Termux установите Git и получите репозиторий:
+```bash
+pkg install git
+git clone https://github.com/pelomen/media-bot-miniapp.git
+cd media-bot-miniapp
+```
+Затем выполните:
+```bash
+bash termux_setup.sh
+```
+Заполните `.env`, затем запустите `bash termux_start.sh`. Скрипт устанавливает Python, FFmpeg и зависимости в виртуальное окружение. Чтобы Android не усыплял процесс, перед запуском можно выполнить `termux-wake-lock`.
+
+Для Linux/macOS после установки зависимостей и заполнения `.env` используйте:
+```bash
+bash run_bot.sh
 ```
 
 ---
@@ -68,7 +82,7 @@ python bot/bot.py
 
 1. Опубликуйте репозиторий на GitHub.
 2. Перейдите в **Settings** -> **Pages**.
-3. В разделе **Source** выберите ветку `main` и папку `/webapp` (или корень).
+3. В разделе **Source** выберите ветку `main` и папку `/docs`.
 4. Получите ссылку вида: `https://<ваш_логин>.github.io/<репозиторий>/`.
 5. Привяжите Mini App в [@BotFather](https://t.me/BotFather):
    - Отправьте команду `/newapp` или `/mybots` -> выберите вашего бота -> `Bot Settings` -> `Menu Button` -> `Configure menu button`.
@@ -88,6 +102,10 @@ media-bot-miniapp/
 │   ├── style.css          # Стили и анимации плеера
 │   └── app.js             # Движок плеера и база IndexedDB
 ├── run_bot.sh             # Скрипт быстрого запуска
+├── start_bot.bat          # Запуск Windows с русскими сообщениями
+├── termux_setup.sh        # Подготовка Termux
+├── termux_start.sh        # Запуск бота в Termux
+├── .env.example          # Образец локальной конфигурации
 └── README.md              # Документация проекта
 ```
 

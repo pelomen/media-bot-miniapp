@@ -4,7 +4,7 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOT_SCRIPT="$DIR/bot/bot.py"
 
-if [ -z "$1" ] && [ -z "$BOT_TOKEN" ]; then
+if [ -z "$1" ] && [ -z "$BOT_TOKEN" ] && [ ! -f "$DIR/.env" ]; then
     echo "=========================================================="
     echo "  Media Downloader Bot & Mini App"
     echo "=========================================================="
@@ -25,9 +25,9 @@ if [ -n "$2" ]; then
     export WEBAPP_URL="$2"
 fi
 
-echo "[*] Запуск бота с токеном: ${BOT_TOKEN:0:10}..."
+echo "[*] Запуск Media Bot..."
 if [ -n "$WEBAPP_URL" ]; then
     echo "[*] Mini App URL: $WEBAPP_URL"
 fi
 
-python "$BOT_SCRIPT"
+exec python "$BOT_SCRIPT"

@@ -11,11 +11,16 @@ Supports:
 import os
 import sys
 import json
+import html
 import logging
+import secrets
+import shutil
 import tempfile
 import asyncio
 import re
 from typing import Optional, List, Dict, Any
+from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     import requests
@@ -33,6 +38,23 @@ from telebot.types import (
 )
 
 # Configuration
+def load_project_env() -> None:
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if not env_file.is_file():
+        return
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key in {"BOT_TOKEN", "WEBAPP_URL"} and not os.environ.get(key):
+                os.environ[key] = value.strip().strip("\"'")
+    except OSError as exc:
+        logging.getLogger("MediaBot").warning("Could not read local .env file: %s", exc)
+
+load_project_env()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
     BOT_TOKEN = sys.argv[1]
@@ -55,14 +77,25 @@ bot = telebot.TeleBot(_init_token, parse_mode="HTML")
 slideshow_cache: Dict[str, Dict[str, Any]] = {}
 
 def is_tiktok_url(url: str) -> bool:
-    return any(domain in url.lower() for domain in ["tiktok.com", "douyin.com", "vt.tiktok.com", "vm.tiktok.com"])
+    host = _url_host(url)
+    return host == "douyin.com" or host.endswith(".douyin.com") or host == "tiktok.com" or host.endswith(".tiktok.com")
 
 def is_youtube_url(url: str) -> bool:
-    return any(domain in url.lower() for domain in ["youtube.com", "youtu.be", "youtube.com/shorts"])
+    host = _url_host(url)
+    return host == "youtu.be" or host.endswith(".youtu.be") or host == "youtube.com" or host.endswith(".youtube.com")
+
+def _url_host(url: str) -> str:
+    candidate = url if "://" in url else f"https://{url}"
+    try:
+        return (urlsplit(candidate).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
 
 def extract_urls(text: str) -> List[str]:
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
-    return re.findall(url_pattern, text or "")
+    urls = re.findall(url_pattern, text or "", flags=re.IGNORECASE)
+    cleaned = [url.rstrip(".,!?;:)]}") for url in urls]
+    return [f"https://{url}" if url.lower().startswith("www.") else url for url in cleaned]
 
 # ==============================================================================
 # TikTok Processing (Video, Slideshow Photos & Music)
@@ -87,16 +120,23 @@ def fetch_tiktok_data(url: str) -> Optional[Dict[str, Any]]:
 
 def download_file(url: str, output_path: str) -> bool:
     """Downloads remote file safely to disk."""
+    if not isinstance(url, str) or not url:
+        return False
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, stream=True, timeout=30)
-        if r.status_code == 200:
+        with requests.get(url, headers=headers, stream=True, timeout=30) as r:
+            r.raise_for_status()
             with open(output_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
-                    f.write(chunk)
-            return True
+                    if chunk:
+                        f.write(chunk)
+        return os.path.getsize(output_path) > 0
     except Exception as e:
         logger.error(f"Download failed for {url}: {e}")
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
     return False
 
 # ==============================================================================
@@ -107,7 +147,7 @@ def download_youtube_media(url: str, download_video: bool = True, download_audio
     import yt_dlp
 
     temp_dir = tempfile.mkdtemp(prefix="yt_")
-    result = {"video_path": None, "audio_path": None, "title": "YouTube Video", "author": "YouTube", "duration": 0}
+    result = {"video_path": None, "audio_path": None, "title": "YouTube Video", "author": "YouTube", "duration": 0, "temp_dir": temp_dir}
 
     # 1. Download Video
     if download_video:
@@ -168,7 +208,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 
 @bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
-    user_name = message.from_user.first_name or "друг"
+    user_name = html.escape(message.from_user.first_name or "друг")
     text = (
         f"👋 <b>Привет, {user_name}!</b>\n\n"
         "Я помогу скачать любое медиа из <b>TikTok</b> и <b>YouTube</b>:\n\n"
@@ -187,8 +227,10 @@ def handle_webapp_data(message):
         data = json.loads(message.web_app_data.data)
         url = data.get("url")
         req_type = data.get("type", "auto")
-        if url:
-            bot.send_message(message.chat.id, f"📥 <b>Получена ссылка из Mini App:</b>\n{url}\nОбрабатываю...")
+        if not isinstance(req_type, str) or req_type not in {"auto", "audio", "slides", "video"}:
+            req_type = "auto"
+        if isinstance(url, str) and url:
+            bot.send_message(message.chat.id, f"📥 <b>Получена ссылка из Mini App:</b>\n{html.escape(url)}\nОбрабатываю...")
             process_media_url(message, url, forced_type=req_type)
     except Exception as e:
         logger.error(f"Error handling WebApp data: {e}")
@@ -214,7 +256,7 @@ def process_media_url(message, url: str, forced_type: str = "auto"):
             bot.edit_message_text("❌ Поддерживаются только ссылки на TikTok и YouTube.", chat_id, status_msg.message_id)
     except Exception as e:
         logger.error(f"Error in process_media_url: {e}")
-        bot.edit_message_text(f"⚠️ Ошибка при обработке ссылки: {e}", chat_id, status_msg.message_id)
+        bot.edit_message_text(f"⚠️ Ошибка при обработке ссылки: {html.escape(str(e))}", chat_id, status_msg.message_id)
 
 def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
     chat_id = message.chat.id
@@ -234,7 +276,7 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
 
     if images and isinstance(images, list) and len(images) > 0:
         # It's a slideshow!
-        token_id = str(abs(hash(url)))
+        token_id = secrets.token_urlsafe(9)
         slideshow_cache[token_id] = {
             "images": images,
             "music_url": music_url,
@@ -264,16 +306,19 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
 
         text = (
             f"📸 <b>TikTok Слайд-шоу обнаружено!</b>\n\n"
-            f"📝 <b>Описание:</b> {title[:150]}\n"
-            f"👤 <b>Автор:</b> {author}\n"
+            f"📝 <b>Описание:</b> {html.escape(str(title)[:150])}\n"
+            f"👤 <b>Автор:</b> {html.escape(str(author))}\n"
             f"🖼 <b>Количество фото:</b> {len(images)}\n"
-            f"🎶 <b>Трек:</b> {music_title} - {music_author}\n\n"
+            f"🎶 <b>Трек:</b> {html.escape(str(music_title))} - {html.escape(str(music_author))}\n\n"
             "Выберите нужный вариант:"
         )
         bot.edit_message_text(text, chat_id, status_msg.message_id, reply_markup=markup)
         return
 
     # It's a regular TikTok Video
+    if forced_type == "slides":
+        bot.edit_message_text("❌ В этой ссылке фото-слайд-шоу не найдено.", chat_id, status_msg.message_id)
+        return
     bot.edit_message_text("🚀 Скачиваю видео без водяного знака и извлекаю звук...", chat_id, status_msg.message_id)
 
     video_url = data.get("play") or data.get("wmplay")
@@ -282,11 +327,11 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
         audio_path = os.path.join(tmp_dir, "tiktok_audio.mp3")
 
         # 1. Download video
-        has_video = download_file(video_url, video_path)
+        has_video = forced_type != "audio" and bool(video_url) and download_file(video_url, video_path)
         # 2. Download audio
         has_audio = download_file(music_url, audio_path) if music_url else False
 
-        caption = f"🎬 <b>{title[:120]}</b>\n👤 {author}\n🎶 {music_title}"
+        caption = f"🎬 <b>{html.escape(str(title)[:120])}</b>\n👤 {html.escape(str(author))}\n🎶 {html.escape(str(music_title))}"
         markup = get_main_keyboard()
 
         if has_video:
@@ -297,12 +342,19 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
             with open(audio_path, "rb") as af:
                 bot.send_audio(chat_id, af, title=music_title, performer=music_author)
 
+        if not has_video and not has_audio:
+            bot.edit_message_text("❌ Не удалось скачать видео или аудиодорожку.", chat_id, status_msg.message_id)
+            return
+
     bot.delete_message(chat_id, status_msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("slide_"))
 def handle_slideshow_callback(call):
     chat_id = call.message.chat.id
-    action, token_id = call.data.split(":")
+    action, separator, token_id = call.data.partition(":")
+    if not separator or action not in {"slide_full", "slide_audio"} or not token_id:
+        bot.answer_callback_query(call.id, "Не удалось обработать выбор.", show_alert=True)
+        return
 
     if token_id not in slideshow_cache:
         bot.answer_callback_query(call.id, "Данные устарели. Отправьте ссылку заново.", show_alert=True)
@@ -329,15 +381,15 @@ def send_slideshow_full(chat_id: int, message_id: int, token_id: str):
         for idx, img_url in enumerate(images):
             img_path = os.path.join(tmp_dir, f"slide_{idx}.jpg")
             if download_file(img_url, img_path):
-                caption = f"📸 Слайд {idx+1}/{len(images)}\n{data['title'][:100]}" if idx == 0 else ""
-                media_group.append(InputMediaPhoto(open(img_path, "rb"), caption=caption))
+                caption = f"📸 Слайд {idx+1}/{len(images)}\n{html.escape(str(data['title'])[:100])}" if not media_group else ""
+                media_group.append((img_path, caption))
 
             if len(media_group) == 10:
-                bot.send_media_group(chat_id, media_group)
+                _send_photo_batch(chat_id, media_group)
                 media_group = []
 
         if media_group:
-            bot.send_media_group(chat_id, media_group)
+            _send_photo_batch(chat_id, media_group)
 
         # Download and send sound
         if music_url:
@@ -354,6 +406,26 @@ def send_slideshow_full(chat_id: int, message_id: int, token_id: str):
                     )
 
     bot.delete_message(chat_id, message_id)
+    slideshow_cache.pop(token_id, None)
+
+def _send_photo_batch(chat_id: int, photos: List[tuple]) -> None:
+    if len(photos) == 1:
+        path, caption = photos[0]
+        with open(path, "rb") as photo:
+            bot.send_photo(chat_id, photo, caption=caption, reply_markup=get_main_keyboard())
+        return
+
+    media = []
+    files = []
+    try:
+        for path, caption in photos:
+            photo = open(path, "rb")
+            files.append(photo)
+            media.append(InputMediaPhoto(photo, caption=caption))
+        bot.send_media_group(chat_id, media)
+    finally:
+        for photo in files:
+            photo.close()
 
 def send_slideshow_audio(chat_id: int, message_id: int, token_id: str):
     data = slideshow_cache.get(token_id)
@@ -365,6 +437,7 @@ def send_slideshow_audio(chat_id: int, message_id: int, token_id: str):
 
     if not music_url:
         bot.edit_message_text("❌ Аудиодорожка не найдена для этого слайд-шоу.", chat_id, message_id)
+        slideshow_cache.pop(token_id, None)
         return
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -379,30 +452,47 @@ def send_slideshow_audio(chat_id: int, message_id: int, token_id: str):
                     caption="🎶 Музыка из TikTok слайд-шоу",
                     reply_markup=get_main_keyboard()
                 )
+        else:
+            bot.edit_message_text("❌ Не удалось скачать аудиодорожку. Попробуйте ещё раз.", chat_id, message_id)
+            slideshow_cache.pop(token_id, None)
+            return
 
     bot.delete_message(chat_id, message_id)
+    slideshow_cache.pop(token_id, None)
 
 def handle_youtube(message, status_msg, url: str, forced_type: str = "auto"):
     chat_id = message.chat.id
+    if forced_type == "slides":
+        bot.edit_message_text("❌ Фото-слайд-шоу доступны только для ссылок TikTok.", chat_id, status_msg.message_id)
+        return
     bot.edit_message_text("🚀 Скачиваю видео и аудио с YouTube (yt-dlp)...", chat_id, status_msg.message_id)
+    res = None
+    try:
+        download_video = (forced_type != "audio")
+        download_audio = (forced_type != "video")
+        res = download_youtube_media(url, download_video=download_video, download_audio=download_audio)
 
-    download_video = (forced_type != "audio")
-    download_audio = (forced_type != "video")
+        caption = f"▶ <b>{html.escape(str(res['title'])[:120])}</b>\n👤 {html.escape(str(res['author']))}"
+        markup = get_main_keyboard()
+        sent_any = False
 
-    res = download_youtube_media(url, download_video=download_video, download_audio=download_audio)
+        if res.get("video_path") and os.path.exists(res["video_path"]):
+            with open(res["video_path"], "rb") as vf:
+                bot.send_video(chat_id, vf, caption=caption, reply_markup=markup, supports_streaming=True)
+                sent_any = True
 
-    caption = f"▶ <b>{res['title'][:120]}</b>\n👤 {res['author']}"
-    markup = get_main_keyboard()
+        if res.get("audio_path") and os.path.exists(res["audio_path"]):
+            with open(res["audio_path"], "rb") as af:
+                bot.send_audio(chat_id, af, title=res["title"], performer=res["author"])
+                sent_any = True
 
-    if res.get("video_path") and os.path.exists(res["video_path"]):
-        with open(res["video_path"], "rb") as vf:
-            bot.send_video(chat_id, vf, caption=caption, reply_markup=markup, supports_streaming=True)
-
-    if res.get("audio_path") and os.path.exists(res["audio_path"]):
-        with open(res["audio_path"], "rb") as af:
-            bot.send_audio(chat_id, af, title=res["title"], performer=res["author"])
-
-    bot.delete_message(chat_id, status_msg.message_id)
+        if sent_any:
+            bot.delete_message(chat_id, status_msg.message_id)
+        else:
+            bot.edit_message_text("❌ Не удалось скачать видео или аудиодорожку. Проверьте ссылку и попробуйте снова.", chat_id, status_msg.message_id)
+    finally:
+        if res and res.get("temp_dir"):
+            shutil.rmtree(res["temp_dir"], ignore_errors=True)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
@@ -420,6 +510,7 @@ if __name__ == "__main__":
         print("   python bot.py <ВАШ_ТОКЕН> [URL_МИНИ_АППА]")
         print(" Или:")
         print("   export BOT_TOKEN='123456:ABC...' && python bot.py")
+        print("   Укажите BOT_TOKEN в локальном файле .env")
         print("=" * 50 + "\n")
         sys.exit(1)
 

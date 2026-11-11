@@ -96,10 +96,12 @@ class MediaDB {
   async clearAll() {
     const stores = ["tracks", "videos", "slides"];
     for (const storeName of stores) {
-      await new Promise((resolve) => {
+      await new Promise((resolve, reject) => {
         const transaction = this.db.transaction([storeName], "readwrite");
         transaction.objectStore(storeName).clear();
         transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error("IndexedDB clear aborted"));
       });
     }
   }
@@ -121,6 +123,33 @@ const state = {
   currentSlideIndex: 0,
   activeSlideshow: null
 };
+
+function escapeHTML(value = "") {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char]);
+}
+
+function restoreStoredMedia(item) {
+  if (item.blob instanceof Blob && item.url?.startsWith("blob:")) {
+    item.url = URL.createObjectURL(item.blob);
+  }
+  return item;
+}
+
+function restoreStoredSlideshow(slide) {
+  if (Array.isArray(slide.imageBlobs)) {
+    slide.images = slide.imageBlobs.map((blob) => URL.createObjectURL(blob));
+  }
+  if (slide.audioBlob instanceof Blob) {
+    slide.audioUrl = URL.createObjectURL(slide.audioBlob);
+  }
+  return slide;
+}
+
+function revokeBlobUrl(url) {
+  if (typeof url === "string" && url.startsWith("blob:")) URL.revokeObjectURL(url);
+}
 
 // DOM Elements
 const audio = document.getElementById("globalAudio");
@@ -195,7 +224,7 @@ function loadTrack(index) {
   currentTrackAuthor.textContent = track.author || "TikTok / YouTube";
 
   if (track.cover) {
-    currentCover.innerHTML = `<img src="${track.cover}" alt="cover">`;
+    currentCover.innerHTML = `<img src="${escapeHTML(track.cover)}" alt="cover">`;
   } else {
     currentCover.innerHTML = `<i class="fa-solid fa-compact-disc disc-spinning" id="discIcon"></i>`;
   }
@@ -207,7 +236,7 @@ function loadTrack(index) {
 }
 
 function playTrack() {
-  if (state.currentTrackIndex === -1 && state.tracks.length > 0) {
+  if (state.currentTrackIndex === -1 && state.tracks.length > 0 && !audio.src) {
     loadTrack(0);
   }
   if (!audio.src) return;
@@ -309,6 +338,10 @@ audio.addEventListener("timeupdate", () => {
 });
 
 audio.addEventListener("ended", () => {
+  if (state.currentTrackIndex === -1) {
+    pauseTrack();
+    return;
+  }
   if (state.repeatMode === "one") {
     audio.currentTime = 0;
     playTrack();
@@ -345,14 +378,14 @@ function renderTracks() {
   }
 
   trackListEl.innerHTML = state.tracks.map((track, idx) => `
-    <div class="track-item ${idx === state.currentTrackIndex ? "active" : ""}" data-index="${idx}">
+      <div class="track-item ${idx === state.currentTrackIndex ? "active" : ""}" data-index="${idx}">
       <div class="track-item-left">
         <div class="track-thumb">
-          ${track.cover ? `<img src="${track.cover}">` : `<i class="fa-solid fa-music"></i>`}
+          ${track.cover ? `<img src="${escapeHTML(track.cover)}" alt="">` : `<i class="fa-solid fa-music"></i>`}
         </div>
         <div class="track-info">
-          <h4>${track.title || "Песня #" + (idx + 1)}</h4>
-          <p>${track.author || "TikTok / YouTube"} • ${track.duration || "Аудио"}</p>
+          <h4>${escapeHTML(track.title || "Песня #" + (idx + 1))}</h4>
+          <p>${escapeHTML(track.author || "TikTok / YouTube")} • ${escapeHTML(track.duration || "Аудио")}</p>
         </div>
       </div>
       <div class="track-actions">
@@ -376,8 +409,26 @@ function renderTracks() {
       e.stopPropagation();
       triggerHaptic("warning");
       const id = btn.getAttribute("data-id");
+      const deletedIndex = state.tracks.findIndex((track) => track.id === Number(id));
+      const deletingCurrent = deletedIndex === state.currentTrackIndex;
+      const deletedTrack = state.tracks[deletedIndex];
       await db.delete("tracks", id);
+      revokeBlobUrl(deletedTrack?.url);
       state.tracks = state.tracks.filter((t) => t.id !== Number(id));
+      if (deletingCurrent) {
+        pauseTrack();
+        state.currentTrackIndex = -1;
+        audio.removeAttribute("src");
+        if (state.tracks.length > 0) {
+          loadTrack(Math.min(deletedIndex, state.tracks.length - 1));
+        } else {
+          currentTrackTitle.textContent = "Выберите песню";
+          currentTrackAuthor.textContent = "Media Player";
+          currentCover.innerHTML = '<i class="fa-solid fa-compact-disc disc-spinning" id="discIcon"></i>';
+        }
+      } else if (deletedIndex >= 0 && deletedIndex < state.currentTrackIndex) {
+        state.currentTrackIndex--;
+      }
       renderTracks();
     });
   });
@@ -395,13 +446,13 @@ function renderVideos() {
   }
 
   videoGridEl.innerHTML = state.videos.map((vid) => `
-    <div class="video-card" data-url="${vid.url}" data-title="${vid.title}">
+    <div class="video-card" data-url="${escapeHTML(vid.url)}" data-title="${escapeHTML(vid.title)}">
       <div class="video-card-thumb">
-        ${vid.thumb ? `<img src="${vid.thumb}">` : `<i class="fa-solid fa-film" style="font-size:32px;color:#818cf8;"></i>`}
+        ${vid.thumb ? `<img src="${escapeHTML(vid.thumb)}" alt="">` : `<i class="fa-solid fa-film" style="font-size:32px;color:#f5f5f5;"></i>`}
         <div class="play-badge"><i class="fa-solid fa-play"></i></div>
       </div>
       <div class="video-card-body">
-        <h4>${vid.title || "Видео"}</h4>
+        <h4>${escapeHTML(vid.title || "Видео")}</h4>
       </div>
     </div>
   `).join("");
@@ -445,7 +496,7 @@ function renderSlideshows() {
   slideshowViewer.className = "slideshow-container";
   slideshowViewer.innerHTML = `
     <div class="slides-carousel">
-      <img id="activeSlideImage" src="${slide.images[0]}" alt="Slide">
+      <img id="activeSlideImage" src="${escapeHTML(slide.images[0])}" alt="Slide">
       <div class="slide-controls">
         <button id="prevSlideBtn" class="slide-btn"><i class="fa-solid fa-chevron-left"></i></button>
         <button id="nextSlideBtn" class="slide-btn"><i class="fa-solid fa-chevron-right"></i></button>
@@ -454,11 +505,11 @@ function renderSlideshows() {
     </div>
     <div class="slides-music-bar">
       <div>
-        <h4 style="font-size:13px;">${slide.title || "TikTok Слайд-шоу"}</h4>
+        <h4 style="font-size:13px;">${escapeHTML(slide.title || "TikTok Слайд-шоу")}</h4>
         <p style="font-size:11px;color:var(--text-muted);">Оригинальный звук</p>
       </div>
       ${slide.audioUrl ? `
-        <button id="playSlideMusicBtn" class="icon-btn" style="background:#a855f7;color:#fff;">
+        <button id="playSlideMusicBtn" class="icon-btn" style="background:#f5f5f5;color:#080808;">
           <i class="fa-solid fa-play"></i>
         </button>` : ""}
     </div>
@@ -494,6 +545,7 @@ function renderSlideshows() {
     playSlideMusicBtn.addEventListener("click", () => {
       triggerHaptic("medium");
       audio.src = slide.audioUrl;
+      state.currentTrackIndex = -1;
       currentTrackTitle.textContent = slide.title || "Звук из слайд-шоу";
       currentTrackAuthor.textContent = "TikTok Audio";
       playTrack();
@@ -508,9 +560,11 @@ importBtn.addEventListener("click", () => fileInput.click());
 
 fileInput.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files);
+  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+  const slideshowAudio = files.find((file) => file.type.startsWith("audio/"));
   for (const file of files) {
-    const url = URL.createObjectURL(file);
     if (file.type.startsWith("audio/")) {
+      const url = URL.createObjectURL(file);
       const newTrack = {
         title: file.name.replace(/\.[^/.]+$/, ""),
         author: "Локальный файл",
@@ -523,6 +577,7 @@ fileInput.addEventListener("change", async (e) => {
       newTrack.id = id;
       state.tracks.push(newTrack);
     } else if (file.type.startsWith("video/")) {
+      const url = URL.createObjectURL(file);
       const newVideo = {
         title: file.name.replace(/\.[^/.]+$/, ""),
         url: url,
@@ -534,19 +589,43 @@ fileInput.addEventListener("change", async (e) => {
       state.videos.push(newVideo);
     }
   }
+  if (imageFiles.length > 0) {
+    const slide = {
+      title: imageFiles[0].name.replace(/\.[^/.]+$/, "") || "Импортированное слайд-шоу",
+      images: imageFiles.map((file) => URL.createObjectURL(file)),
+      imageBlobs: imageFiles,
+      audioUrl: slideshowAudio ? URL.createObjectURL(slideshowAudio) : null,
+      audioBlob: slideshowAudio || null
+    };
+    slide.id = await db.add("slides", slide);
+    state.slideshows.unshift(slide);
+  }
+  e.target.value = "";
   renderTracks();
   renderVideos();
+  renderSlideshows();
   triggerHaptic("success");
 });
 
 clearDataBtn.addEventListener("click", async () => {
   triggerHaptic("warning");
-  if (confirm("Очистить все сохраненные треки и видео из памяти?")) {
+  if (confirm("Очистить все сохраненные треки, видео и слайд-шоу из памяти?")) {
+    state.tracks.forEach((track) => revokeBlobUrl(track.url));
+    state.videos.forEach((video) => revokeBlobUrl(video.url));
+    state.slideshows.forEach((slide) => {
+      (slide.images || []).forEach(revokeBlobUrl);
+      revokeBlobUrl(slide.audioUrl);
+    });
     await db.clearAll();
     state.tracks = [];
     state.videos = [];
     state.slideshows = [];
     pauseTrack();
+    state.currentTrackIndex = -1;
+    audio.removeAttribute("src");
+    currentTrackTitle.textContent = "Выберите песню";
+    currentTrackAuthor.textContent = "Media Player";
+    currentCover.innerHTML = '<i class="fa-solid fa-compact-disc disc-spinning" id="discIcon"></i>';
     renderTracks();
     renderVideos();
     renderSlideshows();
@@ -562,7 +641,7 @@ submitLinkBtn.addEventListener("click", () => {
     return;
   }
 
-  const selectedType = document.querySelector('input[name="downloadType"]:checked').value;
+  const selectedType = document.querySelector('input[name="downloadType"]:checked')?.value || "auto";
   triggerHaptic("success");
 
   // If inside Telegram WebApp, send data back to bot
@@ -589,43 +668,25 @@ function showFeedback(text, type) {
 /* ==========================================================================
    Default Demo Tracks
    ========================================================================== */
-const sampleTracks = [
-  {
-    title: "Phonk Night (TikTok Viral)",
-    author: "TikTok Trending Sound",
-    duration: "02:14",
-    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-    cover: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150"
-  },
-  {
-    title: "Chill Cyber Beat (YouTube Audio)",
-    author: "YouTube Creator Audio",
-    duration: "03:05",
-    url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-    cover: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=150"
-  }
-];
-
 /* ==========================================================================
    Init Application
    ========================================================================== */
 async function initApp() {
   await db.init();
 
-  const savedTracks = await db.getAll("tracks");
-  const savedVideos = await db.getAll("videos");
-  const savedSlides = await db.getAll("slides");
-
-  if (savedTracks.length > 0) {
-    state.tracks = savedTracks;
-  } else {
-    // Populate demo tracks on first launch
-    for (const track of sampleTracks) {
-      const id = await db.add("tracks", track);
-      track.id = id;
-      state.tracks.push(track);
+  const savedTracks = (await db.getAll("tracks")).map(restoreStoredMedia);
+  const libraryTracks = [];
+  for (const track of savedTracks) {
+    if (track.url?.startsWith("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-")) {
+      await db.delete("tracks", track.id);
+      continue;
     }
+    libraryTracks.push(track);
   }
+  const savedVideos = (await db.getAll("videos")).map(restoreStoredMedia);
+  const savedSlides = (await db.getAll("slides")).map(restoreStoredSlideshow);
+
+  state.tracks = libraryTracks;
 
   state.videos = savedVideos;
   state.slideshows = savedSlides;
