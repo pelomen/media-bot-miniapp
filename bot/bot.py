@@ -100,44 +100,143 @@ def extract_urls(text: str) -> List[str]:
 # ==============================================================================
 # TikTok Processing (Video, Slideshow Photos & Music)
 # ==============================================================================
-def fetch_tiktok_data(url: str) -> Optional[Dict[str, Any]]:
-    """Fetches high-quality metadata from TikWM API with zero watermark."""
+def _normalize_tikwm_data(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Normalizes a tikwm-style payload into the shape the bot expects."""
+    if not isinstance(data, dict):
+        return None
+    if data.get("code") not in (0, 200) or "data" not in data:
+        return None
+    payload = data.get("data")
+    if not isinstance(payload, dict) or not payload:
+        return None
+    # tikwm returns relative media paths like "/video/media/play/..." — make them absolute
+    for key in ("play", "wmplay", "hdplay", "music"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("/"):
+            payload[key] = f"https://tikwm.com{value}"
+    return payload
+
+
+def _fetch_tiklydown_data(url: str) -> Optional[Dict[str, Any]]:
+    """Fallback provider: tiklydown returns a compatible json structure."""
     try:
-        api_url = "https://tikwm.com/api/"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json"
         }
-        res = requests.post(api_url, data={"url": url, "count": 12, "cursor": 0, "web": 1, "hd": 1}, headers=headers, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("code") == 0 and "data" in data:
-                return data["data"]
-            logger.warning(f"TikWM returned message: {data.get('msg')}")
+        res = requests.get(f"https://api.tiklydown.eu.org/api/download?url={url}", headers=headers, timeout=15)
+        if res.status_code != 200:
+            logger.warning(f"tiklydown status: {res.status_code}")
+            return None
+        raw = res.json()
+        if not isinstance(raw, dict) or raw.get("error"):
+            return None
+        video = raw.get("video") or {}
+        music = raw.get("music") or {}
+        images = raw.get("images")
+        return {
+            "play": video.get("noWatermark") or video.get("playAddr") or video.get("downloadAddr"),
+            "wmplay": video.get("watermarked") or None,
+            "images": images if isinstance(images, list) else None,
+            "music": music.get("play_url") or music.get("original_sound_url"),
+            "title": raw.get("title") or "TikTok Media",
+            "author": {"nickname": (raw.get("author") or {}).get("nickname", "TikTok User")},
+            "music_info": {"title": music.get("title", "TikTok Sound"), "author": music.get("author", "")},
+        }
     except Exception as e:
-        logger.error(f"Error querying TikWM API: {e}")
+        logger.error(f"Error querying tiklydown API: {e}")
     return None
 
-def download_file(url: str, output_path: str) -> bool:
-    """Downloads remote file safely to disk."""
-    if not isinstance(url, str) or not url:
-        return False
+
+def fetch_tiktok_data(url: str) -> Optional[Dict[str, Any]]:
+    """Fetches metadata with zero watermark. Tries TikWM first, falls back to tiklydown."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    for attempt, api_url in enumerate(("https://tikwm.com/api/", "https://tikwm.us/api/", "https://www.tikwm.com/api/")):
+        try:
+            res = requests.post(api_url, data={"url": url, "count": 12, "cursor": 0, "web": 1, "hd": 1}, headers=headers, timeout=15)
+            if res.status_code == 200:
+                data = _normalize_tikwm_data(res.json())
+                if data:
+                    return data
+                logger.warning(f"TikWM ({api_url}) returned an unusable response")
+            else:
+                logger.warning(f"TikWM ({api_url}) status: {res.status_code}")
+        except Exception as e:
+            logger.error(f"Error querying TikWM ({api_url}): {e}")
+
+    fallback = _fetch_tiklydown_data(url)
+    if fallback:
+        logger.info("TikWM unavailable, using tiklydown fallback data")
+        return fallback
+    return None
+
+
+def _guess_audio_ext(content_type: str) -> str:
+    """Picks a truthful file extension so Telegram parses audio correctly."""
+    ct = (content_type or "").lower()
+    if "mp4" in ct or "m4a" in ct or "aac" in ct:
+        return "m4a"
+    if "mpeg" in ct or "mp3" in ct:
+        return "mp3"
+    return "mp3"
+
+
+def download_audio_via_ytdlp(url: str, output_dir: str) -> Optional[str]:
+    """Last-resort audio extraction via yt-dlp (works even when 3rd-party APIs are down)."""
+    import yt_dlp
+
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": os.path.join(output_dir, "fallback_audio.%(ext)s"),
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "quiet": True,
+        "no_warnings": True,
+    }
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(url, download=True)
+        audio_file = os.path.join(output_dir, "fallback_audio.mp3")
+        if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+            return audio_file
+    except Exception as e:
+        logger.error(f"yt-dlp audio fallback error: {e}")
+    return None
+
+def download_file(url: str, output_path: str) -> Optional[str]:
+    """Downloads a remote file to disk. Returns the actual path (with a truthful
+    extension based on the server's content type) or None on failure."""
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Referer": "https://www.tiktok.com/"}
         with requests.get(url, headers=headers, stream=True, timeout=30) as r:
             r.raise_for_status()
+            # Some CDNs serve m4a/aac for "music" links — keep the real extension
+            ext = _guess_audio_ext(r.headers.get("Content-Type", ""))
+            stem, current_ext = os.path.splitext(output_path)
+            if current_ext.lower() in (".mp3", ".m4a") and current_ext.lower() != f".{ext}":
+                output_path = f"{stem}.{ext}"
             with open(output_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
-        return os.path.getsize(output_path) > 0
+        if os.path.getsize(output_path) > 0:
+            return output_path
+        os.remove(output_path)
     except Exception as e:
         logger.error(f"Download failed for {url}: {e}")
         try:
             os.remove(output_path)
         except OSError:
             pass
-    return False
+    return None
 
 # ==============================================================================
 # YouTube Processing via yt-dlp
@@ -263,7 +362,26 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
     data = fetch_tiktok_data(url)
 
     if not data:
-        bot.edit_message_text("⚠️ Не удалось получить данные из TikTok. Попробуйте еще раз.", chat_id, status_msg.message_id)
+        # All provider APIs failed — fall back to direct yt-dlp extraction
+        logger.info("Provider APIs failed, using yt-dlp fallback for TikTok")
+        yt_res = download_youtube_media(url, download_video=(forced_type != "audio"), download_audio=True)
+        sent_any = False
+        caption = f"🎬 <b>{html.escape(str(yt_res['title'])[:120])}</b>\n👤 {html.escape(str(yt_res['author']))}"
+        if yt_res.get("video_path") and os.path.exists(yt_res["video_path"]):
+            with open(yt_res["video_path"], "rb") as vf:
+                bot.send_video(chat_id, vf, caption=caption, reply_markup=get_main_keyboard(), supports_streaming=True)
+            sent_any = True
+        if yt_res.get("audio_path") and os.path.exists(yt_res["audio_path"]):
+            with open(yt_res["audio_path"], "rb") as af:
+                bot.send_audio(chat_id, af, title=yt_res["title"], performer=yt_res["author"])
+            sent_any = True
+        shutil.rmtree(yt_res["temp_dir"], ignore_errors=True)
+        if sent_any:
+            bot.delete_message(chat_id, status_msg.message_id)
+        else:
+            bot.edit_message_text(
+                "❌ Не удалось скачать медиа. Источники TikTok недоступны — попробуйте позже.",
+                chat_id, status_msg.message_id)
         return
 
     # Check if it is a Slideshow (Images list)
@@ -329,21 +447,38 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
         # 1. Download video
         has_video = forced_type != "audio" and bool(video_url) and download_file(video_url, video_path)
         # 2. Download audio
-        has_audio = download_file(music_url, audio_path) if music_url else False
+        has_audio = download_file(music_url, audio_path) if music_url else None
+
+        # 3. yt-dlp fallback: provider APIs are flaky, so fall back to direct extraction
+        if not has_audio:
+            fallback_audio = download_audio_via_ytdlp(url, tmp_dir)
+            if fallback_audio:
+                has_audio = fallback_audio
+            elif not has_video and forced_type != "audio":
+                # Nothing came from the API at all — try full yt-dlp video download
+                yt_res = download_youtube_media(url, download_video=True, download_audio=False)
+                # yt-dlp handles TikTok links too; reuse its video output if present
+                if yt_res.get("video_path"):
+                    has_video = yt_res["video_path"]
+                    title = yt_res["title"]
+                    author = yt_res["author"]
 
         caption = f"🎬 <b>{html.escape(str(title)[:120])}</b>\n👤 {html.escape(str(author))}\n🎶 {html.escape(str(music_title))}"
         markup = get_main_keyboard()
 
         if has_video:
-            with open(video_path, "rb") as vf:
+            with open(has_video, "rb") as vf:
                 bot.send_video(chat_id, vf, caption=caption, reply_markup=markup, supports_streaming=True)
 
         if has_audio:
-            with open(audio_path, "rb") as af:
+            with open(has_audio, "rb") as af:
                 bot.send_audio(chat_id, af, title=music_title, performer=music_author)
 
         if not has_video and not has_audio:
-            bot.edit_message_text("❌ Не удалось скачать видео или аудиодорожку.", chat_id, status_msg.message_id)
+            bot.edit_message_text(
+                "❌ Не удалось скачать видео или аудиодорожку.\n"
+                "Источники TikTok сейчас недоступны — попробуйте ещё раз через пару минут.",
+                chat_id, status_msg.message_id)
             return
 
     bot.delete_message(chat_id, status_msg.message_id)
@@ -394,8 +529,9 @@ def send_slideshow_full(chat_id: int, message_id: int, token_id: str):
         # Download and send sound
         if music_url:
             audio_path = os.path.join(tmp_dir, "slide_audio.mp3")
-            if download_file(music_url, audio_path):
-                with open(audio_path, "rb") as af:
+            saved_audio = download_file(music_url, audio_path)
+            if saved_audio:
+                with open(saved_audio, "rb") as af:
                     bot.send_audio(
                         chat_id,
                         af,
@@ -442,8 +578,9 @@ def send_slideshow_audio(chat_id: int, message_id: int, token_id: str):
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         audio_path = os.path.join(tmp_dir, "slide_audio.mp3")
-        if download_file(music_url, audio_path):
-            with open(audio_path, "rb") as af:
+        saved_audio = download_file(music_url, audio_path)
+        if saved_audio:
+            with open(saved_audio, "rb") as af:
                 bot.send_audio(
                     chat_id,
                     af,

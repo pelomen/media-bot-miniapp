@@ -634,7 +634,116 @@ clearDataBtn.addEventListener("click", async () => {
 });
 
 // Submit link via Mini App
-submitLinkBtn.addEventListener("click", () => {
+// ---- Direct in-app download: fetch media from TikWM right into the player ----
+const TIKWM_APIS = ["https://tikwm.com/api/", "https://tikwm.us/api/", "https://www.tikwm.com/api/"];
+
+function absolutizeMediaUrl(value) {
+  if (typeof value !== "string" || !value) return null;
+  if (value.startsWith("/")) return "https://tikwm.com" + value;
+  if (value.startsWith("http")) return value;
+  return null;
+}
+
+async function fetchMediaInfo(url) {
+  for (const api of TIKWM_APIS) {
+    try {
+      const res = await fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ url: url, count: 12, cursor: 0, web: 1, hd: 1 }).toString()
+      });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const data = json && json.code === 0 ? json.data : null;
+      if (!data) continue;
+      const images = Array.isArray(data.images) ? data.images.map(absolutizeMediaUrl).filter(Boolean) : null;
+      return {
+        isSlideshow: !!(images && images.length),
+        images: images,
+        musicUrl: absolutizeMediaUrl(data.music),
+        videoUrl: absolutizeMediaUrl(data.play) || absolutizeMediaUrl(data.hdplay),
+        title: data.title || "TikTok Media",
+        author: (data.author && data.author.nickname) || "TikTok User",
+        musicTitle: (data.music_info && data.music_info.title) || "TikTok Sound"
+      };
+    } catch (e) {
+      console.warn("fetchMediaInfo failed for", api, e);
+    }
+  }
+  return null;
+}
+
+async function fetchAsBlob(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  if (blob.size === 0) throw new Error("empty blob");
+  return blob;
+}
+
+async function addAudioTrack(blob, title, author) {
+  const newTrack = {
+    title: title,
+    author: author || "TikTok",
+    duration: "Аудио",
+    url: URL.createObjectURL(blob),
+    cover: null,
+    blob: blob
+  };
+  const id = await db.add("tracks", newTrack);
+  newTrack.id = id;
+  state.tracks.push(newTrack);
+  renderTracks();
+  triggerHaptic("success");
+  return newTrack;
+}
+
+async function tryDirectDownload(url) {
+  showFeedback("Ищу трек в TikTok...", "info");
+  const info = await fetchMediaInfo(url);
+  if (!info) return false;
+
+  // Slideshow: grab the sound track
+  const audioSource = info.isSlideshow ? info.musicUrl : (info.musicUrl || null);
+  if (!audioSource && !info.videoUrl) return false;
+
+  if (audioSource) {
+    showFeedback("Качаю звук прямо в плеер...", "info");
+    try {
+      const blob = await fetchAsBlob(audioSource);
+      await addAudioTrack(blob, info.musicTitle, info.author);
+      showFeedback(`✓ Песня сохранена в плеер: ${info.musicTitle}`, "success");
+      return true;
+    } catch (e) {
+      console.warn("Audio fetch blocked:", e);
+    }
+  }
+
+  if (!info.isSlideshow && info.videoUrl) {
+    showFeedback("Звук недоступен, качаю видео...", "info");
+    try {
+      const blob = await fetchAsBlob(info.videoUrl);
+      const newVideo = {
+        title: info.title,
+        url: URL.createObjectURL(blob),
+        thumb: null,
+        blob: blob
+      };
+      const id = await db.add("videos", newVideo);
+      newVideo.id = id;
+      state.videos.push(newVideo);
+      renderVideos();
+      triggerHaptic("success");
+      showFeedback(`✓ Видео сохранено в плеер: ${info.title}`, "success");
+      return true;
+    } catch (e) {
+      console.warn("Video fetch blocked:", e);
+    }
+  }
+  return false;
+}
+
+submitLinkBtn.addEventListener("click", async () => {
   const url = linkInput.value.trim();
   if (!url) {
     showFeedback("Вставьте ссылку на TikTok или YouTube", "error");
@@ -642,22 +751,29 @@ submitLinkBtn.addEventListener("click", () => {
   }
 
   const selectedType = document.querySelector('input[name="downloadType"]:checked')?.value || "auto";
-  triggerHaptic("success");
-
-  // If inside Telegram WebApp, send data back to bot
-  if (tg && tg.sendData) {
-    try {
-      tg.sendData(JSON.stringify({ action: "download", url: url, type: selectedType }));
-      showFeedback("Запрос передан боту! Он уже скачивает...", "success");
-      setTimeout(() => tg.close(), 1200);
+  submitLinkBtn.disabled = true;
+  try {
+    // 1. Try downloading straight into the player
+    const directOk = await tryDirectDownload(url);
+    if (directOk) {
+      linkInput.value = "";
       return;
-    } catch (e) {
-      console.warn("Could not send data to Telegram:", e);
     }
-  }
 
-  showFeedback(`Заказ принят: ${url} (${selectedType}). Отправьте её в чат с ботом для мгновенного скачивания!`, "success");
-  linkInput.value = "";
+    // 2. Direct download failed — do NOT close the app, tell the user what to do
+    showFeedback("Прямое скачивание сейчас недоступно. Скопирую ссылку — отправь её боту в чат для скачивания.", "info");
+    linkInput.value = "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        showFeedback("Ссылка скопирована! Отправь её в чат с ботом — он скачает и пришлёт файл.", "info");
+      }
+    } catch (e) {
+      console.warn("Clipboard unavailable:", e);
+    }
+  } finally {
+    submitLinkBtn.disabled = false;
+  }
 });
 
 function showFeedback(text, type) {
