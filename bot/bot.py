@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Media Downloader Bot & Telegram Mini App Companion
+Media Downloader Telegram Bot
 Supports:
 - TikTok Videos (No Watermark) -> Video + Audio
 - TikTok Slideshows (Photos + Original Sound / Audio only)
 - YouTube Videos & Shorts -> Video + MP3 Audio
-- Telegram Mini App (TMA) Integration
 """
 
 import os
 import sys
-import json
 import html
 import logging
 import secrets
@@ -33,8 +31,7 @@ import telebot
 from telebot.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    InputMediaPhoto,
-    WebAppInfo
+    InputMediaPhoto
 )
 
 # Configuration
@@ -49,7 +46,7 @@ def load_project_env() -> None:
                 continue
             key, value = line.split("=", 1)
             key = key.strip()
-            if key in {"BOT_TOKEN", "WEBAPP_URL"} and not os.environ.get(key):
+            if key == "BOT_TOKEN" and not os.environ.get(key):
                 os.environ[key] = value.strip().strip("\"'")
     except OSError as exc:
         logging.getLogger("MediaBot").warning("Could not read local .env file: %s", exc)
@@ -58,10 +55,6 @@ load_project_env()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
     BOT_TOKEN = sys.argv[1]
-if len(sys.argv) > 2:
-    os.environ["WEBAPP_URL"] = sys.argv[2]
-
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://pelomen.github.io/media-bot-miniapp/")
 
 logging.basicConfig(
     format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s",
@@ -299,11 +292,8 @@ def download_youtube_media(url: str, download_video: bool = True, download_audio
 # ==============================================================================
 # Telegram Handlers
 # ==============================================================================
-def get_main_keyboard() -> InlineKeyboardMarkup:
-    markup = InlineKeyboardMarkup()
-    if WEBAPP_URL and WEBAPP_URL.startswith("https://"):
-        markup.add(InlineKeyboardButton("📱 Открыть Mini App (Плеер)", web_app=WebAppInfo(url=WEBAPP_URL)))
-    return markup
+def get_main_keyboard() -> Optional[InlineKeyboardMarkup]:
+    return None
 
 @bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
@@ -314,25 +304,9 @@ def send_welcome(message):
         "⚡ <b>TikTok обычные видео:</b> отправляю видео без водяного знака + отдельный MP3 трек.\n"
         "📸 <b>TikTok Слайд-шоу:</b> скачиваю все фото высокого качества + оригинальный звук (или только звук!).\n"
         "▶ <b>YouTube & Shorts:</b> скачиваю видеоролик и аудиодорожку в MP3.\n\n"
-        "🎧 Также доступен встроенный <b>Mini App плеер</b>, где сохраняются все песни и видео!\n\n"
         "👉 <i>Просто пришли мне ссылку на видео или фото-слайды!</i>"
     )
-    bot.reply_to(message, text, reply_markup=get_main_keyboard())
-
-@bot.message_handler(content_types=["web_app_data"])
-def handle_webapp_data(message):
-    """Handles link submissions from inside the Telegram Mini App."""
-    try:
-        data = json.loads(message.web_app_data.data)
-        url = data.get("url")
-        req_type = data.get("type", "auto")
-        if not isinstance(req_type, str) or req_type not in {"auto", "audio", "slides", "video"}:
-            req_type = "auto"
-        if isinstance(url, str) and url:
-            bot.send_message(message.chat.id, f"📥 <b>Получена ссылка из Mini App:</b>\n{html.escape(url)}\nОбрабатываю...")
-            process_media_url(message, url, forced_type=req_type)
-    except Exception as e:
-        logger.error(f"Error handling WebApp data: {e}")
+    bot.reply_to(message, text)
 
 @bot.message_handler(func=lambda msg: bool(extract_urls(msg.text or "")))
 def handle_incoming_link(message):
@@ -419,8 +393,6 @@ def handle_tiktok(message, status_msg, url: str, forced_type: str = "auto"):
         markup.add(
             InlineKeyboardButton("🎵 Только звук (без фоток)", callback_data=f"slide_audio:{token_id}")
         )
-        if WEBAPP_URL and WEBAPP_URL.startswith("https://"):
-            markup.add(InlineKeyboardButton("📱 Открыть в Mini App", web_app=WebAppInfo(url=WEBAPP_URL)))
 
         text = (
             f"📸 <b>TikTok Слайд-шоу обнаружено!</b>\n\n"
@@ -635,9 +607,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         BOT_TOKEN = sys.argv[1]
         bot.token = BOT_TOKEN
-
-    if len(sys.argv) > 2:
-        WEBAPP_URL = sys.argv[2]
 
     if not BOT_TOKEN or ":" not in BOT_TOKEN or "Placeholder" in BOT_TOKEN:
         print("\n" + "=" * 50)
