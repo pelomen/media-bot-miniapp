@@ -154,7 +154,7 @@ def fetch_tiktok_data(url: str) -> Optional[Dict[str, Any]]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json"
     }
-    for attempt, api_url in enumerate(("https://tikwm.com/api/", "https://tikwm.us/api/", "https://www.tikwm.com/api/")):
+    for attempt, api_url in enumerate(("https://tikwm.com/api/", "https://www.tikwm.com/api/")):
         try:
             res = requests.post(api_url, data={"url": url, "count": 12, "cursor": 0, "web": 1, "hd": 1}, headers=headers, timeout=15)
             if res.status_code == 200:
